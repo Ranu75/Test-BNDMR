@@ -151,6 +151,7 @@ patients_EB <- patients_EB[complete.cases(patients_EB$diagnostic), ]
 ```{r}
 # Nombre de patients qui ont été hospitalisés pour EB
 dim(patients_EB) # 164 patients hospitalisés
+patients_EB[duplicated(patients_EB$idmr) | duplicated(patients_EB$idmr, fromLast = TRUE), ] # présence de doublons
 ```
 
 ```{r}
@@ -551,6 +552,21 @@ for (week in weeks) {
 ```
 
 ```{r}
+## concentration de plomb maximale selon le type d'EB
+patients_EB_plomb %>%
+    select(categorie, W0, W1, W4, W6) %>%
+    group_by(categorie) %>%
+    summarise(across(c(W0, W1, W4, W6), min))
+
+## concentration de plomb maximale selon le type d'EB
+patients_EB_plomb %>%
+    select(categorie, W0, W1, W4, W6) %>%
+    group_by(categorie) %>%
+    summarise(across(c(W0, W1, W4, W6), max))
+```
+
+
+```{r}
 # Initialisation de la figure avec une disposition en 2 lignes et 2 colonnes
 par(mfrow = c(2, 2))
 
@@ -697,5 +713,8 @@ legend('bottomright', legend=c('EB_jonc_atresie_pylorique', 'EB_jonc_localise', 
 grid()
 ```
 
+```{r}
+patients_EB
+```
 
                                  
