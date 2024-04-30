@@ -1,0 +1,701 @@
+---
+title: "Test - Data Science - BNDMR"
+output: html_notebook
+---
+## Installation des packages
+```{r}
+install.packages("reshape2")
+```
+
+## Chargement des packages
+```{r}
+# Charger les librairies
+library(dplyr)
+library(rmarkdown)
+library(ggplot2)
+library(lubridate)
+library(stats)
+library(reshape2)
+library(cowplot)
+library(RColorBrewer)
+```
+
+## Contexte
+
+Dans le cadre d'une demande de la filière **FIMARAD** pour une étude approfondie de l'*épidermolyse* *bulleuse* (EB), une malade dermatologique rare, nous réaliserons une étude démographique. D’apres la nomenclature Orphanet des maladies rares, l'*EB* se distingue en 2 catégories et sous-catégories : 
+- *épidermolyse* *bulleuse* *simple*, noté 304 :
+  - *épidermolyse* *bulleuse* *simple* *avec* *atrésie* *du* *pylore*, noté 158684;
+  - *épidermolyse* *bulleuse* *simple* *avec* *dystrophie* *musculaire*, noté 257;
+- *épidermolyse* *bulleuse* *jonctionnelle*, noté 305 :
+  - *épidermolyse* *bulleuse* *jonctionnelle* *avec* *atrésie* *pylorique*, noté 79403;
+  - *épidermolyse* *bulleuse* *jonctionnelle* *localisée*, noté 251393;
+
+## Objectif
+
+Dans cette étude, nous nous intéresserons à :
+- étudier les données sur les patients hospitalisées pour l'*EB*;
+- évaluer l'impact du type *EB* sur l'évolution de la concentration de plomb chez les patients traités avec le même médicaments
+
+## Exploration des données
+
+### Présentation des tables
+
+Pour réaliser notre étude, la filière nous a confiée trois tables : 
+- *patients* : données démographiques des patients 
+- *diagnostics* : données sur les diagnostics des patients
+- *obs_plomb* : données sur l'état des patients traités par le plomb durant 6 semaines
+
+```{r}
+# Charger les données
+diagnostics <- readRDS("~/Documents/test-BNDMR/diagnostics.RDS")
+obs_plomb <- readRDS("~/Documents/test-BNDMR/obs_plomb.RDS")
+patients <- readRDS("~/Documents/test-BNDMR/patients.RDS")
+```
+
+```{r}
+# Caractéristique des tables
+str(diagnostics)
+str(obs_plomb)
+str(patients)
+```
+
+```{r}
+# Taille des tables
+dim(diagnostics)
+dim(obs_plomb)
+dim(patients)
+```
+
+#### Description des tables
+
+La table *patients* possède les variable suivantes :
+- *birthyear* : année de naissance du patient;
+- *housenum* : numéro de la maison du patient;
+- *streetname* : nom de la rue du patient;
+- *idmr* : identifiant du patient;
+- *alive* : statut vital du patient;
+
+La table *diagnostics* possède les variables suivantes :
+- *idmr* : identifiant du patient;
+- *diagnostics* : type de *EB* atteint par le patient;
+- *level*
+- *inclusion* : date de début de l'hospitalisation du patient;
+- *last_activity* : dernière date de l'activité du patient;
+
+La table *obs_plomb* possède les variables suivants :
+- *idmr* : identifiant du patient;
+- *WO* : pas de traitement
+- *W1* : première semaine du traitement de plomb
+- *W4* : quatrième semaine du traitement de plomb
+- *W6* : dernière semaine du traitement de plomb
+
+#### Données démographiques sur les patients hospitaliéses pour l'EB
+
+```{r}
+patients_EB <-left_join(patients, diagnostics, by="idmr")
+head(patients_EB)
+```
+
+#### Nettoyage des données
+
+##### Données démographiques des patients hospitalisés pour l'EB
+
+On commence par identifier les valeurs manquantes et les supprimer. 
+
+```{r}
+# Vérification des valeurs manquantes
+any(is.na(patients_EB))
+
+# Nombre de valeurs manquantes pour chaque variable
+colSums(is.na(patients_EB))
+```
+
+```{r}
+# Identifier les lignes avec des valeurs manquantes
+rows_with_missing_values <- patients_EB[apply(patients_EB[, c('diagnostic', 'inclusion', 'last_activity')], 1, function(x) any(is.na(x))), ]
+print(head(rows_with_missing_values, 10))
+
+# Nombre de valeurs manquantes
+print(colSums(is.na(rows_with_missing_values)))
+
+# Récupérez les ensembles d'identifiants des deux DataFrames
+identifiers1 <- unique(rows_with_missing_values$idmr)
+identifiers2 <- unique(diagnostics$idmr)
+
+# Vérifiez si tous les identifiants de la base de données 1 sont présents dans la base de données 2
+if (all(identifiers1 %in% identifiers2)) {
+    print("Tous les identifiants de la table sont présents dans la table diagnostics.")
+} else {
+    print("Certains identifiants de la table ne sont pas présents dans la table diagnostics.")
+}
+```
+On constate qu'on a des valeurs manquantes suite à notre jointure. Cela s'expliquer par le fait que tout les patients ne sont atteints de l'*EB*. En tout, 23 patients n'en souffrent pas. 
+
+```{r}
+# Identifier les lignes avec des valeurs manquantes dans la variable catégorielle 'level'
+rows_with_missing_values <- patients_EB[is.na(patients_EB$level), ]
+
+# Compter le nombre de chaque modalité de 'diagnostic' pour les lignes avec des valeurs manquantes dans 'level'
+modalities_counts <- table(rows_with_missing_values$diagnostic)
+
+# Afficher les pourcentages
+cat("Pourcentage de chaque modalité de diagnostics associée à une valeur manquante dans 'level':\n")
+prop.table(modalities_counts) * 100
+```
+
+```{r}
+# Supprimer les lignes avec des valeurs manquantes dans la colonne 'diagnostics'
+patients_EB <- patients_EB[complete.cases(patients_EB$diagnostic), ]
+```
+
+```{r}
+# Nombre de patients qui ont été hospitalisés pour EB
+dim(patients_EB) # 164 patients hospitalisés
+```
+
+```{r}
+# On cherche juste à savoir combien de patients hospitalisés pour l'EB sont suivis pour le traitement de plomb dans le sang
+EB_plomb <- merge(patients_EB, obs_plomb, by='idmr', all.x=TRUE)
+EB_plomb <- EB_plomb[complete.cases(EB_plomb$W0), ]
+dim(EB_plomb)
+```
+Il y a 83 patients qui ont été suivis sur leur concentration du plomb dans le sang. 
+
+```{r}
+# Supprimer les lignes avec des valeurs manquantes dans la colonne 'level'
+patients_EB <- patients_EB[complete.cases(patients_EB$level), ]
+
+# Nombre de patients qui ont été hospitalisés pour EB et ont un niveau
+dim(patients_EB) # 124 patients hospitalisés
+```
+
+```{r}
+# Supprimer la colonne housenum
+patients_EB <- subset(patients_EB, select = -housenum)
+```
+
+```{r}
+# Nombre de valeurs manquantes pour chaque variable
+colSums(is.na(patients_EB))
+```
+
+On enchaîne par le traitement des doublons. Nous nous focaliserons uniquement sur la variable "idmr" pour cela. En effet, si deux patients ont le même identifiant, cela risque d'être problématique.
+
+```{r}
+# Identifier les lignes en double basées sur la colonne 'idmr'
+patients_EB[duplicated(patients_EB$idmr) | duplicated(patients_EB$idmr, fromLast = TRUE), ]
+```
+```{r}
+# Identifier les lignes en double basées sur la colonne 'idmr' et conserver uniquement la première occurrence
+patients_EB_unique <- patients_EB[!duplicated(patients_EB$idmr) & !duplicated(patients_EB$idmr, fromLast = TRUE), ]
+```
+
+
+On constate que l'on a un seul doublon. La différence réside dans le diagnostics. Il s'avère que le patient est atteint du *EB jonctionnelle*, plus précisément du *épidermolyse bulleuse jonctionnelle*. On va donc se focaliser uniquement sur la première variable qui est plus précise.
+
+```{r}
+# Rendre les variables 'alive' et 'diagnostic' catégorielles
+patients_EB$alive <- factor(patients_EB$alive)
+patients_EB$diagnostic <- factor(patients_EB$diagnostic)
+```
+
+##### Construction de nouvelles variables
+Commençons la création de nouvelles variables. Selon la nomenclature, il existe des catégories et des sous-catégories de l'*EB*.
+
+```{r}
+# Utiliser mutate de dplyr pour créer la nouvelle variable 'catégorie'
+patients_EB <- patients_EB %>%
+  mutate(categorie = case_when(
+    diagnostic %in% c(251393, 79403, 305) ~ "EB jonc",
+    diagnostic %in% c(158684, 257, 304) ~ "EB simple",
+    TRUE ~ "Aucun"
+  ))
+```
+
+
+```{r}
+# Utiliser mutate de dplyr pour créer la nouvelle variable 'sous-catégorie'
+patients_EB <- patients_EB %>%
+  mutate(sous_categorie = case_when(
+    diagnostic == 251393 ~ "EB jonc atresie pylorique",
+    diagnostic == 79403 ~ "EB jonc localise",
+    diagnostic == 305 ~ "EB jonc non identifié",
+    diagnostic == 158684 ~ "EB simple atresie pylorique",
+    diagnostic == 257 ~ "EB simple dysotrophie",
+    diagnostic == 304 ~ "EB simple non identifié",
+    TRUE ~ "Pas de sous-catégorie"
+  ))
+```
+
+
+```{r}
+# Convertir les variables de date au format datetime
+patients_EB$inclusion <- as.Date(patients_EB$inclusion)
+patients_EB$last_activity <- as.Date(patients_EB$last_activity)
+
+# Soustraire les deux dates pour obtenir la différence en jours
+patients_EB$durée <- as.numeric(difftime(patients_EB$inclusion, patients_EB$last_activity, units = "days"))
+patients_EB$durée <- patients_EB$durée * -1
+```
+
+
+```{r}
+# Extraire l'année d'inclusion
+patients_EB$year_inclusion <- year(patients_EB$inclusion)
+
+# Calculer l'âge des patients au moment de leur inclusion
+patients_EB$age_inclusion <- patients_EB$year_inclusion - patients_EB$birthyear
+```
+
+
+```{r}
+# Extraire l'année de la dernière activité
+patients_EB$year_last_activity <- year(patients_EB$last_activity)
+
+# Calculer l'âge des patients au moment de leur dernière activité
+patients_EB$age_last_activity <- patients_EB$year_last_activity - patients_EB$birthyear
+```
+
+
+##### Données sur les patients de l'EB traités par le plomb
+
+On commence par identifier les valeurs manquantes et les supprimer. 
+
+```{r}
+patients_EB_plomb <- merge(patients_EB, obs_plomb, by='idmr', all.x=TRUE)
+head(patients_EB_plomb)
+```
+
+```{r}
+# Vérification des valeurs manquantes
+print(colSums(is.na(patients_EB_plomb)))
+
+# Supprimer les lignes avec des valeurs manquantes dans la colonne 'W0'
+patients_EB_plomb <- patients_EB_plomb[complete.cases(patients_EB_plomb$W0), ]
+```
+
+```{r}
+# Identifier les lignes en double basées sur la colonne 'idmr'
+patients_EB_plomb[duplicated(patients_EB_plomb$idmr) | duplicated(patients_EB_plomb$idmr, fromLast = TRUE), ]
+# Supprimer les lignes en double basées sur la colonne 'idmr'
+patients_EB_plomb <- unique(patients_EB_plomb, by = "idmr")
+```
+
+```{r}
+# Calculer le nombre de lignes non traitées par le plomb
+nb_lignes_non_traitées <- nrow(patients_EB) - nrow(patients_EB_plomb)
+
+# Afficher le résultat
+print(paste("Il y a", nb_lignes_non_traitées, "qui ne sont pas traitées par le plomb."))
+```
+
+#### Analyse des données démographiques des patients hospitalisés pour l'*EB*
+
+##### Analyse sur le diagnostic
+```{r}
+# Créer un graphique de comptage avec ggplot2
+ggplot(patients_EB, aes(x = categorie, fill = alive)) +
+  geom_bar(position = "dodge") +
+  labs(x = "Catégorie", y = "Comptage", fill = "Alive") +
+  ggtitle("Comptage des catégories par état de vie")
+```
+
+```{r}
+# Données
+modalites_counts_simple <- table(patients_EB$sous_categorie[patients_EB$categorie == "EB simple"])
+modalites_counts_jonc <- table(patients_EB$sous_categorie[patients_EB$categorie == "EB jonc"])
+
+# Diagramme circulaire pour la catégorie "EB simple" avec étiquettes numériques
+pie_simple <- ggplot(data = data.frame(modalites_counts_simple), aes(x = "", y = Freq, fill = factor(Var1), label = Freq)) +
+  geom_bar(stat = "identity", width = 1) +
+  geom_text(aes(label = Freq), position = position_stack(vjust = 0.5)) +  # Ajouter les étiquettes numériques
+  coord_polar("y", start = 0) +
+  theme_void() +
+  theme(legend.position = "bottom") +
+  scale_fill_manual(values = c('#FF5733', '#FF8C00', '#FFA07A', '#FF6347', '#FF4500')) +
+  labs(title = "Répartition des sous-catégorie de EB simple", fill = "Sous-catégorie") +
+  guides(fill = guide_legend(nrow = 2))  # Définir le nombre de lignes dans la légende
+
+# Diagramme circulaire pour la catégorie "EB jonctionnelle" avec étiquettes numériques
+pie_jonc <- ggplot(data = data.frame(modalites_counts_jonc), aes(x = "", y = Freq, fill = factor(Var1), label = Freq)) +
+  geom_bar(stat = "identity", width = 1) +
+  geom_text(aes(label = Freq), position = position_stack(vjust = 0.5)) +  # Ajouter les étiquettes numériques
+  coord_polar("y", start = 0) +
+  theme_void() +
+  theme(legend.position = "bottom") +
+  scale_fill_manual(values = c('#2E86C1', '#85C1E9', '#AED6F1', '#D6EAF8', '#EBF5FB')) +
+  labs(title = "Répartition des sous-catégorie de EB jonctionnelle", fill = "Sous-catégorie") +
+  guides(fill = guide_legend(nrow = 2))  # Définir le nombre de lignes dans la légende
+
+# Afficher les deux diagrammes circulaires côte à côte
+cowplot::plot_grid(pie_simple, pie_jonc, ncol = 1)
+```
+
+```{r}
+# Données
+modalites_counts <- table(patients_EB$sous_categorie)
+
+# Répartition de la population selon les sous-catégories
+pie_chart <- ggplot(data = data.frame(modalites_counts), aes(x = "", y = Freq, fill = factor(Var1), label = Freq)) +
+  geom_bar(stat = "identity", width = 1) +
+  geom_text(aes(label = Freq), position = position_stack(vjust = 0.5)) +  # Ajouter les étiquettes numériques
+  coord_polar("y", start = 0) +
+  theme_void() +
+  theme(legend.position = "bottom") +
+  labs(title = "Répartition des diagnostics", fill = "Sous-catégorie") +
+  scale_fill_brewer(palette = "Set3")  # Vous pouvez remplacer "Set3" par le nom de la palette de couleurs de votre choix
+
+# Afficher le diagramme circulaire
+pie_chart
+
+```
+
+Généralement, on constate que c'est plutôt équilibré en termes répartition des diagnostics. On peut observer qu'il y a 32.8% de maladies qui n'ont pas pu identifier précisément.
+
+```{r}
+# Créer la table de contingence
+diagnostic_alive <- table(patients_EB$diagnostic, patients_EB$alive)
+
+# Effectuer le test du Chi carré
+test_chi2 <- chisq.test(diagnostic_alive)
+
+# Afficher les résultats
+print(test_chi2)
+```
+On constate que la p-valeur est inférieur à 0.05 donc il existe une association significative entre les variables "diagnostic" et "alive". 
+
+##### Analyse entre le niveau et le diagnostic
+```{r}
+# Données
+modalites_counts <- table(patients_EB$level)
+
+# Répartition des niveaux 
+pie_chart <- ggplot(data = data.frame(modalites_counts), aes(x = "", y = Freq, fill = factor(Var1), label = Freq)) +
+  geom_bar(stat = "identity", width = 1) +
+  geom_text(aes(label = Freq), position = position_stack(vjust = 0.5), color = "white") +  # Ajouter les étiquettes numériques
+  coord_polar("y", start = 0) +
+  theme_void() +
+  theme(legend.position = "bottom") +
+  labs(title = "Répartition des niveaux du diagnostic", fill = "Niveau") +
+  scale_fill_brewer(palette = "Dark2")  # Utiliser la palette Dark2 de RColorBrewer
+
+# Afficher le diagramme circulaire
+pie_chart
+```
+
+```{r}
+# Créer un graphique de comptage avec ggplot2
+ggplot(patients_EB, aes(x = diagnostic, fill = level)) +
+  geom_bar(position = "dodge") +
+  labs(x = "Diagnostic", y = "Nombre de patients", fill = "Level") +
+  ggtitle("Nombre de patients par niveau selon les diagnostics")
+```
+
+```{r}
+# Créer la table de contingence
+diagnostics_level <- table(patients_EB$sous_categorie, patients_EB$level)
+
+# Effectuer le test du Chi carré
+test_chi2 <- chisq.test(diagnostics_level)
+
+# Afficher les résultats
+print(test_chi2)
+```
+
+##### Analyse entre l'âge du patient et le diagnostic
+
+```{r}
+# Créer un histogramme avec ggplot2
+ggplot(patients_EB, aes(x = age_inclusion)) +
+  geom_histogram(binwidth = 10, fill = "skyblue", color = "black") +
+  ggtitle("Distributions des patients selon l'âge de l'inclusion à l'hôpital") +
+  labs(x = "Âge de l'inclusion", y = "Nombre de patients") +
+  geom_vline(xintercept = mean(patients_EB$age_inclusion), color = "red", linetype = "dashed") +
+  geom_vline(xintercept = 50, color = "darkgreen", linetype = "dashed") +
+  theme_minimal()
+```
+
+```{r}
+# Créer un histogramme avec ggplot2
+ggplot(patients_EB, aes(x = age_last_activity)) +
+  geom_histogram(binwidth = 10, fill = "lightcoral", color = "black") +
+  ggtitle("Distributions des patients selon son âge à sa dernière activité à l'hôpital") +
+  labs(x = "Âge lors de la dernière activité", y = "Nombre de patients") +
+  geom_vline(xintercept = mean(patients_EB$age_last_activity), color = "red", linetype = "dashed") +
+  geom_vline(xintercept = 50, color = "darkgreen", linetype = "dashed") +
+  theme_minimal()
+```
+
+```{r}
+# Classer les patients selon s'ils ont plus ou moins de 50 ans lors de leur dernière activité
+patients_EB <- patients_EB %>%
+  mutate(last_activity_50 = ifelse(age_last_activity < 50, "Moins de 50 ans", "Plus de 50 ans"))
+
+# Classer les patients selon s'ils ont plus ou moins de 50 ans lors de leur inclusion
+patients_EB <- patients_EB %>%
+  mutate(inclusion_50 = ifelse(age_inclusion < 50, "Moins de 50 ans", "Plus de 50 ans"))
+```
+
+```{r}
+# Table de contingence entre 'sous-catégorie' et 'inclusion_50'
+table_inclusion <- table(patients_EB$sous_categorie, patients_EB$inclusion_50)
+
+# Afficher la table de contingence
+print("Table de contingence entre 'sous-catégorie' et 'inclusion_50':")
+print(table_inclusion)
+cat("\n")
+
+# Table de contingence entre 'sous-catégorie' et 'last_activity_50'
+table_last_activity <- table(patients_EB$sous_categorie, patients_EB$last_activity_50)
+
+# Afficher la table de contingence
+print("Table de contingence entre 'sous-catégorie' et 'last_activity_50':")
+print(table_last_activity)
+```
+
+```{r}
+# Créer un graphique de comptage avec ggplot2 
+ggplot(patients_EB, aes(x = inclusion_50, fill = categorie)) +
+  geom_bar(position = "dodge") +
+  labs(x = "Catégorie d'âge", y = "Nombre de patient", fill = "Catégorie") +
+  ggtitle("Nombre de patients hospitalisés pour l'EB selon l'âge au moment de l'inclusion")
+
+ggplot(patients_EB, aes(x = last_activity_50, fill = categorie)) +
+  geom_bar(position = "dodge") +
+  labs(x = "Catégorie d'âge", y = "Nombre de patient", fill = "Catégorie") +
+  ggtitle("Nombre de patients hospitalisés pour l'EB selon l'âge au moment de la dernière activité")
+```
+On constate que quel que soit le diagnostic, les patients agés de plus de 50 ans prédominent largement. Beaucoup plus de personnes agés de plus de 50 ans sont incluses à l'hôpital. Les analyses sur les dernières activités des patients montrent que personnes de plus de 50 ans sont encore nombreuses.
+
+```{r}
+# Calculer la durée moyenne des patients à l'hôpital
+duree_moyenne <- mean(patients_EB$durée)
+print(paste("La durée moyenne des patients à l'hôpital est de", duree_moyenne, "jours."))
+```
+
+```{r}
+# Créer un histogramme avec ggplot2
+ggplot(patients_EB, aes(x = durée)) +
+  geom_histogram(binwidth = 10, fill = "skyblue", color = "black") +
+  ggtitle("Distribution de la durée du séjour du patient à l'hôpital") +
+  labs(x = "Durée", y = "Nombre de patients") +
+  geom_vline(xintercept = mean(patients_EB$durée), color = "red", linetype = "dashed") +
+  geom_vline(xintercept = 365, color = "darkgreen", linetype = "dashed") +
+  theme_minimal()
+```
+
+```{r}
+ggplot(patients_EB, aes(x = diagnostic, y = durée, fill = sous_categorie)) +
+  geom_boxplot() +
+  ggtitle("Boxplot de la durée du séjour du patient à l'hôpital par diagnostic") +
+  labs(y = "Durée du séjour du patient à l'hôpital", fill = "Diagnostic") +
+  theme_minimal()
+```
+
+#### Évaluer l'impact du type *EB* sur l'évolution de la concentration de plomb 
+
+##### Analyse exploratoire sur la typologie de l'EB des patients suivis pour la concentration de plomb
+
+```{r}
+# Filtrer les données pour EB simple
+patients_EB_plomb_simple <- filter(patients_EB_plomb, categorie == "EB simple")
+
+# Filtrer les données pour EB jonc
+patients_EB_plomb_jonc <- filter(patients_EB_plomb, categorie == "EB jonc")
+```
+
+```{r}
+# Nombre de patients traités pour l'EB simple
+nombre_patients_simple <- nrow(patients_EB_plomb_simple)
+nombre_patients_simple_dysotrophie <- nrow(filter(patients_EB_plomb_simple, sous_categorie == "EB simple dysotrophie"))
+nombre_patients_simple_atresie_pylorique <- nrow(filter(patients_EB_plomb_simple, sous_categorie == "EB simple atresie pylorique"))
+nombre_patients_simple_non_identifie <- nrow(filter(patients_EB_plomb_simple, sous_categorie == "EB simple non identifié"))
+
+# Afficher les résultats
+print(paste("Le nombre de patients traités pour l'EB simple est de ", nombre_patients_simple, "parmi ceux-ci ",
+            nombre_patients_simple_dysotrophie, "sont atteints de l'EB simple dysotrophie et ",
+            nombre_patients_simple_atresie_pylorique, "sont atteints de l'EB simple atresie pylorique. ",
+            nombre_patients_simple_non_identifie, "patients n'ont pas pu être identifiés précisément."
+           ))
+
+# Nombre de patients traités pour l'EB jonctionnelle
+nombre_patients_jonc <- nrow(patients_EB_plomb_jonc)
+nombre_patients_jonc_localise <- nrow(filter(patients_EB_plomb_jonc, sous_categorie == "EB jonc localise"))
+nombre_patients_jonc_atresie_pylorique <- nrow(filter(patients_EB_plomb_jonc, sous_categorie == "EB jonc atresie pylorique"))
+nombre_patients_jonc_non_identifie <- nrow(filter(patients_EB_plomb_jonc, sous_categorie == "EB jonc non identifié"))
+
+# Afficher les résultats
+print(paste("Le nombre de patients traités pour l'EB jonctionnelle est de ", nombre_patients_jonc, "parmi ceux-ci ",
+            nombre_patients_jonc_localise, "sont atteints de l'EB jonctionnelle localisée et ",
+            nombre_patients_jonc_atresie_pylorique, "sont atteints de l'EB jonctionnelle atresie pylorique. ",
+            nombre_patients_jonc_non_identifie, "patients n'ont pas pu être identifiés précisément."
+           ))
+
+```
+
+##### Analyse exploratoire pour comprendre la distribution de la concentration de plomb pour chaque semaine selon chaque type de EB
+
+```{r}
+# Initialisation de la figure avec 2 lignes et 2 colonnes
+par(mfrow = c(2, 2))
+weeks <- c('W0', 'W1', 'W4', 'W6')
+
+# Parcourir chaque semaine et créer un boxplot pour chaque type EB
+for (week in weeks) {
+  # Créer le boxplot
+  boxplot(patients_EB_plomb$W0 ~ patients_EB_plomb$categorie, data = patients_EB_plomb, 
+          main = paste("Concentration de plomb au", week),
+          xlab = "Catégorie EB", ylab = "Concentration de plomb",
+          col = c("orange", "lightblue"))
+}
+```
+
+```{r}
+# Initialisation de la figure avec une disposition en 2 lignes et 2 colonnes
+par(mfrow = c(2, 2))
+
+# Liste des semaines
+weeks <- c('W0', 'W1', 'W4', 'W6')
+
+# Parcourir chaque semaine et créer un boxplot pour chaque sous-type de l'EB jonctionnelle
+for (week in weeks) {
+  # Créer le boxplot
+  boxplot(patients_EB_plomb_jonc$W0 ~ patients_EB_plomb_jonc$sous_categorie, data = patients_EB_plomb_jonc, 
+          main = paste("Concentration de plomb au", week),
+          xlab = "Sous-catégorie de l'EB jonctionnelle", ylab = "Concentration de plomb",
+          col = c("brown", "violet", "red"))
+}
+```
+
+```{r}
+# Initialisation de la figure avec une disposition en 2 lignes et 2 colonnes
+par(mfrow = c(2, 2))
+
+# Liste des semaines
+weeks <- c('W0', 'W1', 'W4', 'W6')
+
+# Parcourir chaque semaine et créer un boxplot pour chaque sous-type de l'EB simple
+for (week in weeks) {
+  # Créer le boxplot
+  boxplot(patients_EB_plomb_simple$W0 ~ patients_EB_plomb_simple$sous_categorie, data = patients_EB_plomb_simple, 
+          main = paste("Concentration de plomb au", week),
+          xlab = "Sous-catégorie de l'EB simple", ylab = "Concentration de plomb",
+          col = c("blue", "green", "orange"))
+}
+```
+
+```{r}
+patients_EB_plomb_mean
+```
+
+
+
+```{r}
+# Calcul de la moyenne de la concentration de plomb par semaine selon la catégorie
+patients_EB_plomb_mean <- patients_EB_plomb %>%
+  select(categorie, W0, W1, W4, W6) %>%
+  group_by(categorie) %>%
+  summarise(across(c(W0, W1, W4, W6), mean))
+
+# Transposer le dataframe
+patients_EB_plomb_mean <- t(patients_EB_plomb_mean)
+
+# Convertir l'index en colonne
+patients_EB_plomb_mean <- as.data.frame(patients_EB_plomb_mean)
+patients_EB_plomb_mean$week <- row.names(patients_EB_plomb_mean)
+
+# Supprimer la première ligne en utilisant l'index de la ligne
+patients_EB_plomb_mean <- patients_EB_plomb_mean[-1, ]
+
+# Renommer les colonnes
+colnames(patients_EB_plomb_mean) <- c("EB_simple", "EB_jonc", "week")
+
+# Tracé des courbes
+plot(1:length(patients_EB_plomb_mean$week), patients_EB_plomb_mean$EB_simple, type='o', col='skyblue', ylim=c(0, 30), xlab='Semaine', ylab="Concentration de plomb", main="Évolution de l'EB simple et de l'EB jonctionnelle", xaxt="n")
+lines(1:length(patients_EB_plomb_mean$week), patients_EB_plomb_mean$EB_jonc, type='o', col='orange')
+
+# Ajout des étiquettes de l'axe des x
+axis(1, at=1:length(patients_EB_plomb_mean$week), labels=patients_EB_plomb_mean$week)
+
+# Ajout de la légende
+legend('bottomright', legend=c('EB simple', 'EB jonctionnelle'), col=c('skyblue', 'orange'), pch=1)
+
+# Affichage du graphique
+grid()
+```
+Généralement, la concentration du plomb dans le sang diminue pour les patients atteint de l'EB jonctionnelle au fil des semaines. 
+
+Concernant les patients atteint de l'EB simple, la concentration de plomb connaît une forte baisse durant la première semaine avant d'augmenter considérablement.
+
+```{r}
+# Calcul de la moyenne de la concentration de plomb par semaine selon la catégorie
+patients_EB_plomb_simple_mean <- patients_EB_plomb_simple %>%
+  select(sous_categorie, W0, W1, W4, W6) %>%
+  group_by(sous_categorie) %>%
+  summarise(across(c(W0, W1, W4, W6), mean))
+
+# Transposer le dataframe
+patients_EB_plomb_simple_mean <- t(patients_EB_plomb_simple_mean)
+
+# Convertir l'index en colonne
+patients_EB_plomb_simple_mean <- as.data.frame(patients_EB_plomb_simple_mean)
+patients_EB_plomb_simple_mean$week <- row.names(patients_EB_plomb_simple_mean)
+
+# Supprimer la première ligne en utilisant l'index de la ligne
+patients_EB_plomb_simple_mean <- patients_EB_plomb_simple_mean[-1, ]
+
+# Renommer les colonnes
+colnames(patients_EB_plomb_simple_mean) <- c("EB_simple_atresie_pylorique", "EB_simple_dysotrophie", "EB_simple_unidentify", "week")
+
+# Tracé des courbes
+plot(1:length(patients_EB_plomb_simple_mean$week), patients_EB_plomb_simple_mean$EB_simple_atresie_pylorique, type='o', col='blue', ylim=c(0, 30), xlab='Semaine', ylab="Moyenne de la concentration au plomb", main="Évolution moyenne de la concentration de plomb par semaine selon le sous-type d'EB simple", xaxt="n")
+lines(1:length(patients_EB_plomb_simple_mean$week), patients_EB_plomb_simple_mean$EB_simple_dysotrophie, type='o', col='red')
+lines(1:length(patients_EB_plomb_simple_mean$week), patients_EB_plomb_simple_mean$EB_simple_unidentify, type='o', col='green')
+
+# Ajout des étiquettes de l'axe des x
+axis(1, at=1:length(patients_EB_plomb_simple_mean$week), labels=patients_EB_plomb_simple_mean$week)
+
+# Ajout de la légende
+legend('bottomright', legend=c('EB_simple_atresie_pylorique', 'EB_simple_dysotrophie', 'EB_simple_unidentify'), col=c('blue', 'red', 'green'), pch=1)
+
+# Affichage du graphique
+grid()
+```
+
+```{r}
+# Calcul de la moyenne de la concentration de plomb par semaine selon la catégorie
+patients_EB_plomb_jonc_mean <- patients_EB_plomb_jonc %>%
+  select(sous_categorie, W0, W1, W4, W6) %>%
+  group_by(sous_categorie) %>%
+  summarise(across(c(W0, W1, W4, W6), mean))
+
+# Transposer le dataframe
+patients_EB_plomb_jonc_mean <- t(patients_EB_plomb_jonc_mean)
+
+# Convertir l'index en colonne
+patients_EB_plomb_jonc_mean <- as.data.frame(patients_EB_plomb_jonc_mean)
+patients_EB_plomb_jonc_mean$week <- row.names(patients_EB_plomb_jonc_mean)
+
+# Supprimer la première ligne en utilisant l'index de la ligne
+patients_EB_plomb_jonc_mean <- patients_EB_plomb_jonc_mean[-1, ]
+
+# Renommer les colonnes
+colnames(patients_EB_plomb_jonc_mean) <- c("EB_jonc_atresie_pylorique", "EB_jonc_localise", "EB_jonc_unidentify", "week")
+
+# Tracé des courbes
+plot(1:length(patients_EB_plomb_jonc_mean$week), patients_EB_plomb_jonc_mean$EB_jonc_atresie_pylorique, type='o', col='brown', ylim=c(0, 30), xlab='Semaine', ylab="Moyenne de la concentration au plomb", main="Évolution moyenne de la concentration de plomb par semaine selon le sous-type d'EB simple", xaxt="n")
+lines(1:length(patients_EB_plomb_jonc_mean$week), patients_EB_plomb_jonc_mean$EB_jonc_localise, type='o', col='purple')
+lines(1:length(patients_EB_plomb_jonc_mean$week), patients_EB_plomb_jonc_mean$EB_jonc_unidentify, type='o', col='red')
+
+# Ajout des étiquettes de l'axe des x
+axis(1, at=1:length(patients_EB_plomb_jonc_mean$week), labels=patients_EB_plomb_jonc_mean$week)
+
+# Ajout de la légende en bas à droite
+legend('bottomright', legend=c('EB_jonc_atresie_pylorique', 'EB_jonc_localise', 'EB_jonc_unidentify'), col=c('brown', 'purple', 'red'), pch=1)
+
+# Affichage du graphique
+grid()
+```
+
+
+                                 
