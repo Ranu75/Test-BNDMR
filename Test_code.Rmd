@@ -428,6 +428,16 @@ ggplot(patients_EB, aes(x = age_last_activity)) +
 ```
 
 ```{r}
+# Âge d'inclusion
+min(patients_EB$age_inclusion)
+max(patients_EB$age_inclusion)
+
+# Âge lors de la dernière activité
+min(patients_EB$age_last_activity)
+max(patients_EB$age_last_activity)
+```
+
+```{r}
 # Classer les patients selon s'ils ont plus ou moins de 50 ans lors de leur dernière activité
 patients_EB <- patients_EB %>%
   mutate(last_activity_50 = ifelse(age_last_activity < 50, "Moins de 50 ans", "Plus de 50 ans"))
@@ -713,8 +723,5 @@ legend('bottomright', legend=c('EB_jonc_atresie_pylorique', 'EB_jonc_localise', 
 grid()
 ```
 
-```{r}
-patients_EB
-```
 
                                  
